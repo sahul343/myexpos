@@ -1,0 +1,194 @@
+alias pcb R9;
+pcb = PROCESS_TABLE + [SYSTEM_STATUS_TABLE + 1]*16;
+
+alias userSP R10;
+userSP = SP;
+[pcb + 13] = SP;
+SP = [pcb + 11]*512  - 1;
+
+alias syscall R11;
+syscall = [ [ PTBR + 2 * ((userSP - 5)/512)]*512 + (userSP - 5)%512];
+
+alias returnaddr R12;
+returnaddr = [PTBR + 2 *( (userSP - 1)/512 )]*512 + (userSP - 1) %512;
+
+//open file system call arguments filename
+if( syscall == 2) then
+	[pcb + 9] = 2;
+	alias pid R4;
+	pid = [SYSTEM_STATUS_TABLE + 1];
+	alias upage R1;
+	upage = [ pcb + 11] * 512;
+	upage = upage + 496;
+	alias counter R2;
+	counter = 0;
+	
+	//finding free resource entry in pre-process resource table
+	while(counter < 8) do
+		 if([upage + counter * 2] == -1) then
+		 	break;
+		 endif;
+		 counter = counter + 1;
+	endwhile;
+	
+	//If no free entry return -2
+	if(counter == 8) then
+		[ returnaddr ]  = -3;
+		SP = [pcb + 13];
+		[pcb + 9] = 0;
+		ireturn;
+	endif;
+	
+	//Extracting the filename from userStack
+	alias filename R3;
+	filename = [ [PTBR + 2 *( (userSP - 4)/512 )]*512 + (userSP - 4) %512 ];
+	
+	//Calling open file 
+	multipush(R9, R10, R11, R12, R1, R2, R3, R4);
+	R1 = 3;
+	R2 = filename;
+	call MOD_3;
+	multipop(R9, R10, R11, R12, R1, R2, R3, R4);
+	
+	//If open file call fails then return the error code
+	if ( R0 == -1 || R0 == -2) then 
+		[ returnaddr ]  = R0;
+		SP = [pcb + 13];
+		[pcb + 9] = 0;
+		ireturn;
+	endif;
+	
+	//Setting the per-process resource table entry
+	[upage + 2 * counter ] = 0;
+	[upage + 2 * counter + 1] = R0;
+	
+	//Returning the file descriptor
+	[ returnaddr ] = counter;
+	SP = [pcb + 13];
+	[pcb + 9] = 0;
+	ireturn;
+endif;
+
+
+//Close file system call, arguments file descriptor
+
+if( syscall == 3) then
+	[pcb + 9] = 3;
+	//Extracting the file descriptor
+	alias filedes R1;
+	filedes = [ [PTBR + 2 *( (userSP - 4)/512 )]*512 + (userSP - 4) %512 ];
+	alias upage R2;
+	upage = [ pcb + 11] * 512;
+	upage = upage + 496 ;
+	
+	//If file descriptor is invalid return -1
+	if ( filedes < 0 || filedes > 7 || [upage + 2 * filedes] != 0) then
+		[ returnaddr ]  = -1;
+		SP = [pcb + 13];
+		[pcb + 9] = 0;
+		ireturn;
+	endif;
+	
+	alias fileindex R3;
+	fileindex = [ upage + 2 * filedes + 1];
+	multipush(R9, R10, R11, R12, R1, R2, R3);
+	R1 = 4;
+	R2 = fileindex;
+	call MOD_3;
+	multipop(R9, R10, R11, R12, R1, R2, R3);
+	
+	//Invalidating the pre-process entry
+	[ upage + filedes * 2 ] = -1;
+	
+	
+	//Returning the user with success code
+	[ returnaddr ] = 0;
+	SP = [pcb + 13];
+	[pcb + 9] = 0;
+	ireturn;
+endif;
+
+if(syscall == 6) then
+	alias fd R1;
+	fd = [ [ PTBR + 2 * ((userSP - 4)/512)]*512 + (userSP - 4)%512];
+	alias offset R2;
+	offset = [ [ PTBR + 2 * ((userSP - 3)/512)]*512 + (userSP - 3)%512];
+	//setting mode flag
+	[pcb + 9] = 6;
+
+	alias upage R3;
+	upage = [pcb + 11]*512 + 496;
+
+	if(fd<0 || fd>7 || [upage + fd*2] != 0) then
+		[returnaddr] = -1;
+		SP = [pcb + 13];
+		[pcb + 9] = 0;
+		ireturn;
+	endif;
+
+	alias openfile R4;
+	openfile = [upage + fd*2 + 1];
+	alias inode R5;
+	inode = [OPEN_FILE_TABLE + 4*openfile ];
+
+
+	//Try locking the inode
+	multipush(R9, R10, R11, R12, R1, R2, R3, R4, R5);
+	R1 = 4;
+	R2 = inode;
+	R3 = [SYSTEM_STATUS_TABLE + 1];
+	call MOD_0;
+	multipop(R9, R10, R11, R12, R1, R2, R3, R4, R5);
+	
+	//If the locking fails return -1
+	if( R0 == -1) then
+		[returnaddr] = -1;
+		SP = [pcb + 13];
+		[pcb + 9] = 0;
+		ireturn;
+	endif;
+
+	alias lseek R6;
+	lseek = [OPEN_FILE_TABLE + 4*openfile + 2];
+	if(lseek + offset < 0) then
+		multipush(R9, R10, R11, R12, R1, R2, R3, R4, R5);
+		R1 = 5;
+		R2 = inode;
+		R3 = [SYSTEM_STATUS_TABLE + 1];
+		call MOD_0;
+		multipop(R9, R10, R11, R12, R1, R2, R3, R4, R5);
+		[returnaddr] = -2;
+		SP = [pcb + 13];
+		[pcb + 9] = 0;
+		ireturn;
+	endif;
+
+	alias filesize R7;
+	if(inode == INODE_ROOT) then
+		filesize = 480;
+	else
+		filesize = [INODE_TABLE + inode*16 + 2];
+	endif;
+
+	if(offset == 0) then
+		[OPEN_FILE_TABLE + 4*openfile + 2] = 0;
+	else 
+		if(offset+lseek > filesize) then
+			[OPEN_FILE_TABLE + 4*openfile + 2] = filesize;
+		else
+			[OPEN_FILE_TABLE + 4*openfile + 2] = lseek + offset;
+		endif;
+	endif;
+
+
+	multipush(R9, R10, R11, R12, R1, R2, R3, R4, R5);
+		R1 = 5;
+		R2 = inode;
+		R3 = [SYSTEM_STATUS_TABLE + 1];
+		call MOD_0;
+	multipop(R9, R10, R11, R12, R1, R2, R3, R4, R5);
+	[returnaddr] = 0;
+	SP = [pcb + 13];
+	[pcb + 9] = 0;
+	ireturn;
+endif;

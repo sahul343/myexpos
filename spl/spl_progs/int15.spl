@@ -1,0 +1,81 @@
+alias PCB R10;
+PCB = PROCESS_TABLE + [SYSTEM_STATUS_TABLE + 1]*16;
+
+[PCB + 13] = SP;
+SP=[PCB + 11]*512-1;
+
+alias userSP R8;
+userSP=[PCB + 13];
+
+alias syscall R9;
+syscall=[[PTBR+((userSP-5)/512)*2]*512+(userSP-5)%512];
+
+if(syscall == 21) then
+	if(([SYSTEM_STATUS_TABLE + 1] != 1) || ([PCB + 3] != 1))then
+		[[PTBR+((userSP-1)/512)*2]*512+(userSP-1)%512] = -1;
+		SP = [PCB + 13];
+		[PCB + 9] = 0;
+		ireturn;
+	endif;
+	multipush(R8,R9,R10);
+		R1 = 5;
+		R2 = [SYSTEM_STATUS_TABLE + 1];
+		call MOD_1;
+	multipop(R8,R9,R10);
+
+
+
+	multipush(R8,R9,R10);
+	
+		//Inode table
+		R1 = 1;
+		R2 = [SYSTEM_STATUS_TABLE + 1];
+		R3 = 59;
+		R4 = 3;
+		
+		call MOD_4;
+		
+		R1 = 1;
+		R2 = [SYSTEM_STATUS_TABLE + 1];
+		R3 = 60;
+		R4 = 4;
+		
+		call MOD_4;
+		
+		// Root file
+		R1 = 1;
+		R2 = [SYSTEM_STATUS_TABLE + 1];
+		R3 = 62;
+		R4 = 5;
+		
+		call MOD_4;
+		
+		
+		//Disk free list
+		R1 = 1;
+		R2 = [SYSTEM_STATUS_TABLE + 1];
+		R3 = 61;
+		R4 = 2;
+		
+		call MOD_4;
+		
+	multipop(R8,R9,R10);
+
+
+	alias counter R11;
+	counter = 0;
+	while(counter < 4) do
+		if([BUFFER_TABLE + counter*4] != -1 && [BUFFER_TABLE + counter*4 +1] == 1) then
+			multipush(R8, R9, R10, R11 );
+			R1 = 1;
+			R2 = [SYSTEM_STATUS_TABLE + 1];
+			R3 = 71+ counter;
+			R4 = [BUFFER_TABLE + counter*4];
+			multipop(R8, R9, R10, R11 );
+		endif;
+		counter = counter + 1;
+	endwhile;
+	
+
+	halt;
+endif;

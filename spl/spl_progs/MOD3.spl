@@ -1,0 +1,190 @@
+alias funcnum R1;
+alias returnvalue R0;
+
+//Buffered read
+//The disk page provided is loaded to the corresponding buffer. The word present at the offset position of the buffer is copied to the Memory address provided as input. Buffer management is handled by this function internally.
+
+if(funcnum == 2 || funcnum == 1) then
+	alias diskBlock R2;
+	alias offset R3;
+	alias memAddr R4; //in case of write the memaddr will itself the value to be written on to the location
+
+	alias bufferNum R5;
+	bufferNum = diskBlock%4;
+
+	multipush(R1,R2,R3,R4,R5);
+	R1 = 1;
+	R2 = bufferNum;
+	R3 = [SYSTEM_STATUS_TABLE + 1];
+	call MOD_0;
+	multipop(R1,R2,R3,R4,R5);
+
+	if([BUFFER_TABLE + 4*bufferNum] != diskBlock) then
+		if([BUFFER_TABLE + 4*bufferNum + 1]==1) then
+			multipush(R1,R2,R3,R4,R5);
+			R1 = 1;
+			R2 = [SYSTEM_STATUS_TABLE + 1];
+			R3 = 71 + bufferNum;
+			R4 = [BUFFER_TABLE + 4*bufferNum];
+			call MOD_4;
+			multipop(R1,R2,R3,R4,R5);
+
+			[BUFFER_TABLE + 4*bufferNum + 1] = 0;
+		endif;
+
+		multipush(R1,R2,R3,R4,R5);
+		R1 = 2;
+		R3 = 71 + bufferNum;
+		R4 = diskBlock;
+		R2 = [SYSTEM_STATUS_TABLE + 1];
+		call MOD_4;
+		multipop(R1,R2,R3,R4,R5);
+
+		[BUFFER_TABLE + 4*bufferNum] = diskBlock;
+	endif;
+	if(funcnum == 2) then
+		[memAddr] = [(71 + bufferNum)*512 + offset];
+
+	else
+		[(71 + bufferNum)*512 + offset] = memAddr;
+		[BUFFER_TABLE + 4*bufferNum + 1] = 1;
+	endif;
+	multipush(R1,R2,R3,R4,R5);
+	R1 = 2;
+	R2 = bufferNum;
+	R3 = [SYSTEM_STATUS_TABLE + 1];
+	call MOD_0;
+	multipop(R1,R2,R3,R4,R5);
+
+	return;
+endif;
+
+
+
+
+//open file call and it is called by open system call
+//On succesful returns open file table index
+if( funcnum == 3) then
+	alias filename R2;
+	alias counter R3;
+	counter = 0;
+	
+	//Find the index of file in inode table
+	while(counter < MAX_FILE_NUM) do
+		if ( [INODE_TABLE + counter * 16 + 1] == filename) then
+			break;
+		endif;
+		counter = counter +1;
+	endwhile;
+	
+	//If the file is not found return -1
+	if( counter == MAX_FILE_NUM) then
+		R0 = -1;
+		return;
+	endif;
+	
+	//Try locking the inode
+	multipush(R1, R2, R3);
+	R1 = 4;
+	R2 = counter;
+	R3 = [SYSTEM_STATUS_TABLE + 1];
+	call MOD_0;
+	multipop(R1, R2, R3);
+	
+	//If the locking fails return -1
+	if( R0 == -1) then
+		return;
+	endif;
+	
+	//If the file is of EXEC type return -1
+	if( [INODE_TABLE + counter * 16] ==  EXEC) then
+		multipush(R1, R2, R3);
+		R1 = 5;
+		R2 = counter;
+		R3 = [SYSTEM_STATUS_TABLE + 1];
+		call MOD_0;
+		multipop(R1, R2, R3);
+		
+		R0 = -1;
+		return ;
+	endif;
+	
+	//
+	alias index R4;
+	index = counter;
+	
+	counter = 0;
+	
+	//finding a free entry in inode
+	while (counter < MAX_OPENFILE_NUM   && ([OPEN_FILE_TABLE + counter * 4 ] != -1)) do
+		counter = counter + 1;
+	endwhile;
+	
+	//if no free entry return -2;
+	if (counter == MAX_OPENFILE_NUM) then
+		multipush(R1, R2, R4);
+		R1 = 5;
+		R2 = index;
+		R3 = [SYSTEM_STATUS_TABLE + 1];
+		call MOD_0;
+		multipop(R1, R2, R4);
+		
+		R0 = -2;
+		return ;
+	endif;
+	
+	// if all valid then validating the entry
+	alias openfileaddr R5;
+	alias filestataddr R6;
+	openfileaddr =	OPEN_FILE_TABLE + counter * 4;
+	filestataddr = FILE_STATUS_TABLE + index * 4;
+	if(filename == "root" ) then
+		[openfileaddr] = INODE_ROOT;
+	else
+		if([filestataddr + 1] == -1) then
+			[filestataddr + 1] = 1;
+		else
+			[filestataddr + 1] = [filestataddr + 1] + 1;
+		endif;
+		[openfileaddr] = index;
+	endif;
+	//setting open instance count to 1;
+	[openfileaddr + 1] = 1;
+	[openfileaddr + 2] = 0;
+	
+	multipush(R1, R2, R4, R3);
+		R1 = 5;
+		R2 = index;
+		R3 = [SYSTEM_STATUS_TABLE + 1];
+		call MOD_0;
+	multipop(R1, R2, R4, R3);
+	
+	R0 = counter; 
+	return ;
+endif;
+
+if(funcnum == 4) then
+	alias opfileindex R2;
+	alias inodeindex R3;
+	alias openfileaddr R4;
+	openfileaddr = OPEN_FILE_TABLE + opfileindex * 4;
+	inodeindex = [ openfileaddr ];
+	
+	[openfileaddr + 1] = [openfileaddr + 1] - 1;
+	
+	if([openfileaddr + 1] == 0) then
+		if([openfileaddr] != INODE_ROOT ) then
+			alias filestataddr R5;
+			filestataddr = FILE_STATUS_TABLE + inodeindex * 4;
+			[filestataddr + 1] = [filestataddr + 1] - 1;
+			if([filestataddr + 1] == 0) then
+				[filestataddr + 1] = -1;
+			endif;
+		endif;
+		[openfileaddr ]    = -1;
+		[openfileaddr + 1] = -1;
+		[openfileaddr + 2] = -1;
+	endif;
+
+	return;
+endif;

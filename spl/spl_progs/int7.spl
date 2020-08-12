@@ -1,0 +1,146 @@
+alias pcb R10;
+pcb = PROCESS_TABLE + ([SYSTEM_STATUS_TABLE+1] * 16) ;
+//setting mode flag
+[pcb + 9] = 5;
+
+alias userSP R11;
+userSP = SP;
+
+[pcb +13] = SP;
+SP = [ pcb + 11] * 512 -1;
+
+
+alias fileDescriptor R12;
+fileDescriptor = [PTBR + 2 *((userSP - 4)/512)] * 512 + (userSP - 4)%512;
+
+alias ret R13;
+ret = ([PTBR + 2*((userSP - 1)/512)] * 512) + ((userSP-1)%512);
+if(fileDescriptor == -2)
+then
+    
+    //calling terminal write function
+    multipush(R10, R11, R12, R13);
+    R1 = 3
+    R2 = [SYSTEM_STATUS_TABLE + 1];
+    R3 = [ [PTBR + 2*((userSP-3)/512)]*512 + (userSP-3)%512 ];
+    call MOD_4;
+    multipop(R10, R11, R12, R13);
+    
+    //returning to user with 0 indicating success
+    [ret] = 0;
+    SP = userSP;
+    [pcb + 9 ] = 0;
+    ireturn;
+else
+    if(fileDescriptor<0 || fileDescriptor>7) then
+        [ret] = -1;
+        SP = userSP;
+        [pcb + 9 ] = 0;
+        ireturn;
+    endif;
+    alias fd_addr R4;
+    fd_addr = [pcb + 11] * 512 + 496 + fileDescriptor * 2;
+
+    if([fd_addr] != FILE) then 
+        [ret] = -1;
+        SP = userSP;
+        [pcb + 9 ] = 0;
+        ireturn;
+    endif
+
+    alias openfile R5;
+    openfile = [fd_addr + 1];
+
+    alias inodeindex R6;
+    inodeindex =[OPEN_FILE_TABLE + openfile * 4];
+
+    if([INODE_TABLE + inodeindex*16 + 3] != [pcb+3] && [pcb + 3] != 0 && [INODE_TABLE + inodeindex*16 + 4] == 0) then
+        [ret] = -3;
+        SP = userSP;
+        [pcb + 9 ] = 0;
+        ireturn;
+    endif;
+
+    multipush(R10, R11, R12, R13, R4, R5, R6);
+        R1 = 4;
+        R2 = inodeindex;
+        R3 = [SYSTEM_STATUS_TABLE+1];
+        call MOD_0;
+    multipop(R10, R11, R12, R13, R4, R5, R6);
+
+    //acquiring inode fails
+    if(R0 == -1) then
+        [ret] = -1;
+        SP = userSP;
+        [pcb + 9 ] = 0;
+        ireturn;
+    endif;
+
+    alias lseek R7;
+    lseek = [OPEN_FILE_TABLE + openfile * 4 + 2];
+
+    if(lseek == MAX_FILE_SIZE) then
+        multipush(R10, R11, R12, R13, R4, R5, R6, R7);
+            R1 = 5;
+            R2 = inodeindex;
+            R3 = [SYSTEM_STATUS_TABLE+1];
+            call MOD_0;
+        multipop(R10, R11, R12, R13, R4, R5, R6, R7);
+        [ret] = -2;
+        SP = userSP;
+        [pcb + 9 ] = 0;
+        ireturn;
+    endif;
+
+    if(lseek%512 == 0 && lseek == [INODE_TABLE + inodeindex*16 + 2]) then
+        multipush(R10, R11, R12, R13, R4, R5, R6, R7);
+            R1 = 3;
+            call MOD_2;
+        multipop(R10, R11, R12, R13, R4, R5, R6, R7);
+        if(R0 == -1 ) then
+            multipush(R10, R11, R12, R13, R4, R5, R6, R7);
+            R1 = 5;
+            R2 = inodeindex;
+            R3 = [SYSTEM_STATUS_TABLE+1];
+            call MOD_0;
+            multipop(R10, R11, R12, R13, R4, R5, R6, R7);
+            [ret] = -2;
+            SP = userSP;
+            [pcb + 9] =0;
+
+        endif;
+        [INODE_TABLE + inodeindex * 16 + 8 + (lseek)/512] = R0;
+        [INODE_TABLE + inodeindex*16 + 2] = [INODE_TABLE + inodeindex*16 + 2] + 512;
+        [ROOT_FILE + inodeindex*8 + 1] = [ROOT_FILE + inodeindex*8 + 1] + 512;
+    endif;
+
+    alias bufferno R9;
+    bufferno = lseek/512;
+    alias blockno R8;
+    blockno = [INODE_TABLE + inodeindex * 16 + 8 + bufferno];
+
+    multipush(R10, R11, R12, R13, R4, R5, R6, R7);
+        R1 = 1;
+        R2 = blockno;
+        R3 = lseek%512;
+        R4 = [ [PTBR + 2*((userSP-3)/512)]*512 + (userSP-3)%512 ];
+        call MOD_3;
+    multipop(R10, R11, R12, R13, R4, R5, R6, R7);
+        
+
+    //lseek equals to files size increment file size in inode table and root
+    [OPEN_FILE_TABLE + openfile*4 + 2 ] =  [OPEN_FILE_TABLE + openfile*4 + 2 ] + 1;
+
+    multipush(R10, R11, R12, R13, R4, R5, R6, R7);
+            R1 = 5;
+            R2 = inodeindex;
+            R3 = [SYSTEM_STATUS_TABLE+1];
+            call MOD_0;
+    multipop(R10, R11, R12, R13, R4, R5, R6, R7);
+
+
+    [ret] = 0;
+    SP = userSP;
+    [pcb + 9] =0;
+    ireturn;
+endif;

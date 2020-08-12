@@ -1,0 +1,13 @@
+load --int=10 ../spl/spl_progs/s14haltprog.xsm
+load --exhandler ../spl/spl_progs/s14haltprog.xsm
+load --library ../expl/library.lib
+load --os ../spl/spl_progs/s13os_startup.xsm
+load --int=timer ../spl/spl_progs/s14sample_timer.xsm
+load --int=7 ../spl/spl_progs/s15sample_int7.xsm
+load --module 7 ../spl/spl_progs/s15MOD7.xsm
+load --module 5 ../spl/spl_progs/s14MOD5.xsm
+load --module 4 ../spl/spl_progs/s15MOD4.xsm
+load --module 0 ../spl/spl_progs/s15MOD0.xsm
+load --init ../expl/stage13/odd100.xsm
+load --exec ../expl/stage13/even100.xsm
+exit

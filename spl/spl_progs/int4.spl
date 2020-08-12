@@ -1,0 +1,193 @@
+//Indicating the process is  in create system call
+alias PCB R7;
+PCB = PROCESS_TABLE + [SYSTEM_STATUS_TABLE+1]*16;
+
+
+alias UserSP R1;
+UserSP = SP;
+[PCB + 13] = SP;
+SP = [PCB + 11]*512 - 1;
+
+
+alias syscall R2;
+syscall = [ [PTBR + 2*((UserSP-5)/512)]*512+(UserSP-5)%512 ];
+
+
+alias returnaddr R12;
+returnaddr = [PTBR + 2*((UserSP-1)/512)]*512+(UserSP-1)%512;
+
+if(syscall == 1) then
+	[PCB + 9] = 1;
+	alias filename R3;
+	filename = [ [PTBR + 2*((UserSP-4)/512)]*512+(UserSP-4)%512 ];
+	alias permission R4;
+	permission = [ [PTBR + 2*((UserSP-3)/512)]*512+(UserSP-3)%512 ];
+	
+	alias counter R5;
+	alias freeentry R6;
+	
+	freeentry = -1;
+	counter = 0;
+	
+	while(counter < MAX_FILE_NUM) do
+		if( [INODE_TABLE + counter*16 + 1] == filename) then
+			[ returnaddr ] = 0;
+			[PCB + 9] = 0;
+			SP = [PCB + 13];
+			ireturn;
+		endif;
+		
+		if( ([INODE_TABLE + counter*16 + 1] == -1) && (freeentry == -1) ) then
+			freeentry = counter;
+		endif;
+		counter = counter+1;
+	endwhile;
+	
+	//If no free entry return -1
+	if(freeentry == -1) then
+		[ returnaddr ] = -1;
+		[PCB + 9] = 0;
+		SP = [PCB + 13];
+		ireturn;
+	endif;
+	
+	alias IT R8;
+	IT = INODE_TABLE + freeentry*16;
+	
+	
+	//Allocating freeentry in inode table to the new file
+	[IT ]    = 2;
+	[IT + 1] = filename;
+	[IT + 2] = 0;
+	[IT + 3] = [PCB + 3];
+	[IT + 4] = permission;
+	counter = 8;
+	while(counter < 12) do
+		[IT + counter]  = -1;
+		counter = counter + 1;
+	endwhile;
+	
+	//Allocating for the new file in root file;
+	alias RF R9;
+	RF = ROOT_FILE + freeentry*8 ;
+	[RF + 0] = filename;
+	[RF + 1] = 0;
+	[RF + 2] = 2;
+	[RF + 3] = [USER_TABLE + 2*[PCB + 3]];
+	[RF + 4] = permission;
+	
+	//Returning to the user mode
+	[ returnaddr ] = 0;
+	[PCB + 9] = 0;
+	SP = [PCB + 13];
+	ireturn;
+endif;
+
+// R7, R2 and R1 are used don't use them in any of the functions
+if(syscall == 4) then
+	//Indicating that the system in delete file system call
+	[PCB + 9] = 4;
+	
+	alias filename R3;
+	filename = [ [PTBR + 2*((UserSP-4)/512)]*512+(UserSP-4)%512 ];
+	
+	alias counter R4;
+	counter = 0;
+	while(counter < MAX_FILE_NUM) do
+		if( [INODE_TABLE + counter*16 + 1] == filename) then
+			break;
+		endif;
+		counter = counter + 1;
+	endwhile;
+	// If file doesn't present in inode table then return 0
+	if(counter == MAX_FILE_NUM) then
+		[ returnaddr ] = 0;
+		[PCB + 9] = 0;
+		SP = [PCB + 13];
+		ireturn;
+	endif;
+	alias IT R5;
+	IT = INODE_TABLE + counter*16;
+	//If the file is not 2 file then return -1
+	if( [IT + 0] != 2) then
+		[ returnaddr ] = -1;
+		[PCB + 9] = 0;
+		SP = [PCB + 13];
+		ireturn;
+	endif;
+	//If The permission is not granted then return -2
+	if( [IT + 4] == 0 && ( [IT + 3] != 1 &&  [PCB + 3] != [IT + 3]) ) then
+		[ returnaddr ] = -1;
+		[PCB + 9] = 0;
+		SP = [PCB + 13];
+		ireturn;
+	endif;
+	
+	//Acquiring A lock on the file 
+	multipush(R1, R2, R3, R4);
+	R1 = 4;
+	R2 = counter;
+	R3 = [SYSTEM_STATUS_TABLE+1];
+	call MOD_0;
+	multipop(R1, R2, R3, R4);
+	
+	//If file already opened then we returned -2
+	if([FILE_STATUS_TABLE + counter*4 + 1] != -1) then
+		//Releasing inode
+		multipush(R1, R2, R3, R4);
+		R1 = 5;
+		R2 = counter;
+		R3 = [SYSTEM_STATUS_TABLE+1];
+		call MOD_0;
+		multipop(R1, R2, R3, R4);
+		//Returning to the user mode
+		[ returnaddr ] = -2;
+		[PCB + 9] = 0;
+		SP = [PCB + 13];
+		ireturn;
+	endif;
+	
+	//check the buffer table to reset dirty bit of each block
+	alias count1 R10;
+	alias count2 R11;
+	count1 = 0;
+	count2 = 0;
+	while(count1 < 4) do
+		count2 = [IT + 8 + count1]%4;
+		if([BUFFER_TABLE + 4 * count2 ] == [IT + 8 + count1]) then
+			[BUFFER_TABLE + 4 * count2 + 1] = 0;
+		endif;
+		
+		multipush(R1, R2, R3, R4);
+		R1 = 4;
+		R2 = [IT + 8 + count1];
+		R3 = [SYSTEM_STATUS_TABLE + 1];
+		call MOD_2;
+		multipop(R1, R2, R3, R4);
+	count1 = count1 + 1;
+	endwhile;
+		
+	alias cnt R6;
+	alias RF R9;
+	RF = ROOT_FILE + counter*8 ;
+	cnt = 0;
+	while(cnt < 16) do
+		[ IT + 2 * cnt ] = -1;
+		[ IT + 2 * cnt + 1] = -1;
+		[ RF + cnt ] = -1;
+		cnt = cnt + 1;
+	endwhile;
+	//Releasing inode
+	multipush(R1, R2, R3);
+	R1 = 5;
+	R2 = counter;
+	R3 = [SYSTEM_STATUS_TABLE+1];
+	call MOD_0;
+	multipop(R1, R2, R3);
+		
+	//Returning to the user mode
+	[ returnaddr ] = 0;
+	[PCB + 9] = 0;
+	SP = [PCB + 13];
+	ireturn;
+endif;
